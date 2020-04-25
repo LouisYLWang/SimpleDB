@@ -51,7 +51,8 @@ public class HeapFileEncoder {
       convert(tempInput, outFile, npagebytes, numFields);
   }
 
-  public static void convert(File inFile, File outFile, int npagebytes, int numFields) throws IOException {
+      public static void convert(File inFile, File outFile, int npagebytes,
+                 int numFields) throws IOException {
       Type[] ts = new Type[numFields];
       for (int i = 0; i < ts.length; i++) {
           ts[i] = Type.INT_TYPE;
@@ -59,7 +60,8 @@ public class HeapFileEncoder {
       convert(inFile,outFile,npagebytes,numFields,ts);
       }
 
-  public static void convert(File inFile, File outFile, int npagebytes, int numFields, Type[] typeAr)
+  public static void convert(File inFile, File outFile, int npagebytes,
+                 int numFields, Type[] typeAr)
       throws IOException {
       convert(inFile,outFile,npagebytes,numFields,typeAr,',');
   }
@@ -143,7 +145,7 @@ public class HeapFileEncoder {
                     System.out.println ("BAD LINE : " + s);
                 }
             }
-            else if (typeAr[fieldNo] == Type.STRING_TYPE) {
+            else   if (typeAr[fieldNo] == Type.STRING_TYPE) {
                 s = s.trim();
                 int overflow = Type.STRING_LEN - s.length();
                 if (overflow < 0) {
@@ -186,7 +188,7 @@ public class HeapFileEncoder {
             
             for (i=0; i<nheaderbits; i++) {
                 if (i < recordcount)
-                        headerbyte |= (1 << (i % 8));
+                    headerbyte |= (1 << (i % 8));
                 
                 if (((i+1) % 8) == 0) {
                     headerStream.writeByte(headerbyte);
