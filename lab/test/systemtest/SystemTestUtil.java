@@ -113,6 +113,7 @@ public class SystemTestUtil {
 
         if (Debug.isEnabled()) {
             Debug.log("Expected tuples:");
+
             for (ArrayList<Integer> t : copy) {
                 Debug.log("\t" + Utility.listToString(t));
             }
