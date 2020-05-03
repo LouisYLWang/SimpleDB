@@ -2,6 +2,7 @@ package simpledb;
 
 import java.io.*;
 
+import java.util.ArrayList;
 import java.util.Random;
 import java.util.concurrent.ConcurrentHashMap;
 
@@ -131,14 +132,14 @@ public class BufferPool {
 
     /**
      * Add a tuple to the specified table on behalf of transaction tid.  Will
-     * acquire a write lock on the page the tuple is added to and any other 
-     * pages that are updated (Lock acquisition is not needed for lab2). 
+     * acquire a write lock on the page the tuple is added to and any other
+     * pages that are updated (Lock acquisition is not needed for lab2).
      * May block if the lock(s) cannot be acquired.
      *
      * Marks any pages that were dirtied by the operation as dirty by calling
-     * their markDirty bit, and adds versions of any pages that have 
-     * been dirtied to the cache (replacing any existing versions of those pages) so 
-     * that future requests see up-to-date pages. 
+     * their markDirty bit, and adds versions of any pages that have
+     * been dirtied to the cache (replacing any existing versions of those pages) so
+     * that future requests see up-to-date pages.
      *
      * @param tid the transaction adding the tuple
      * @param tableId the table to add the tuple to
@@ -148,6 +149,16 @@ public class BufferPool {
         throws DbException, IOException, TransactionAbortedException {
         // some code goes here
         // not necessary for lab1
+        HeapFile hpFile = (HeapFile) Database.getCatalog().getDatabaseFile(tableId);
+        ArrayList<Page> modifiedPagesArr = hpFile.insertTuple(tid, t);
+        for (Page pg: modifiedPagesArr){
+            pg.markDirty(true, tid);
+            if (this.pages.size() > this.numPages){
+                this.evictPage();
+            }
+            this.pages.put(pg.getId(), pg);
+        }
+
     }
 
     /**
@@ -156,9 +167,9 @@ public class BufferPool {
      * other pages that are updated. May block if the lock(s) cannot be acquired.
      *
      * Marks any pages that were dirtied by the operation as dirty by calling
-     * their markDirty bit, and adds versions of any pages that have 
-     * been dirtied to the cache (replacing any existing versions of those pages) so 
-     * that future requests see up-to-date pages. 
+     * their markDirty bit, and adds versions of any pages that have
+     * been dirtied to the cache (replacing any existing versions of those pages) so
+     * that future requests see up-to-date pages.
      *
      * @param tid the transaction deleting the tuple.
      * @param t the tuple to delete
@@ -167,6 +178,13 @@ public class BufferPool {
         throws DbException, IOException, TransactionAbortedException {
         // some code goes here
         // not necessary for lab1
+        int tableId = t.getRecordId().getPageId().getTableId();
+        HeapFile hpFile = (HeapFile) Database.getCatalog().getDatabaseFile(tableId);
+        ArrayList<Page> modifiedPagesArr = hpFile.deleteTuple(tid, t);
+        for(Page pg: modifiedPagesArr){
+            pg.markDirty(true, tid);
+            this.pages.put(pg.getId(), pg);
+        }
     }
 
     /**
@@ -177,6 +195,9 @@ public class BufferPool {
     public synchronized void flushAllPages() throws IOException {
         // some code goes here
         // not necessary for lab1
+        for (PageId pid: this.pages.keySet()){
+            this.flushPage(pid);
+        }
 
     }
 
@@ -191,6 +212,7 @@ public class BufferPool {
     public synchronized void discardPage(PageId pid) {
         // some code goes here
         // not necessary for lab1
+        this.pages.remove(pid);
     }
 
     /**
@@ -200,6 +222,15 @@ public class BufferPool {
     private synchronized  void flushPage(PageId pid) throws IOException {
         // some code goes here
         // not necessary for lab1
+        if (pages.containsKey(pid)){
+            Page pg = pages.get(pid);
+            TransactionId tid = pg.isDirty();
+            if (tid != null){
+                HeapFile f = (HeapFile ) Database.getCatalog().getDatabaseFile(pid.getTableId());
+                f.writePage(pg);
+                pg.markDirty(false, null);
+            }
+        }
     }
 
     /** Write all pages of the specified transaction to disk.
@@ -216,6 +247,13 @@ public class BufferPool {
     private synchronized  void evictPage() throws DbException {
         // some code goes here
         // not necessary for lab1
+        int randomId = (int) (Math.random() * (pages.size()));
+        ArrayList<PageId> arrayList = new ArrayList<>(pages.keySet());
+        PageId pageId = arrayList.get(randomId);
+        try {
+            flushPage(pageId);
+        } catch (IOException e) {}
+        pages.remove(pageId);
     }
 
 }

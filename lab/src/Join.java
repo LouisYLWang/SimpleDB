@@ -17,6 +17,7 @@ public class Join extends Operator {
     private TupleDesc td2;
     private ConcurrentHashMap<Field, ArrayList<Tuple>> child1Hash;
     private ConcurrentLinkedQueue<Tuple> outputBuffer;
+    private Tuple t;
 
 
     /**
@@ -127,27 +128,53 @@ public class Join extends Operator {
      */
     protected Tuple fetchNext() throws TransactionAbortedException, DbException {
         // some code goes here
+        // optimize for non-ranged query
         if (!outputBuffer.isEmpty()){
             return outputBuffer.poll();
         }
-
-        while (child2.hasNext()){
-            Tuple t2 = this.child2.next();
-            Field f2 = t2.getField(this.p.getField2());
-            while (child1Hash.containsKey (f2)){
-                for (Tuple t1:child1Hash.get(f2)){
-                    TupleDesc td1 = t1.getTupleDesc();
-                    TupleDesc td2 = t2.getTupleDesc();
-                    Tuple mergedTuple = new Tuple(TupleDesc.merge(td1, td2));
-                    for (int i = 0; i < t1.numFields(); i++){
-                        mergedTuple.setField(i, t1.getField(i));
+        if (this.p.getOperator().equals(Predicate.Op.EQUALS)){
+            while (child2.hasNext()){
+                Tuple t2 = this.child2.next();
+                Field f2 = t2.getField(this.p.getField2());
+                while (child1Hash.containsKey (f2)){
+                    for (Tuple t1:child1Hash.get(f2)){
+                        TupleDesc td1 = t1.getTupleDesc();
+                        TupleDesc td2 = t2.getTupleDesc();
+                        Tuple mergedTuple = new Tuple(TupleDesc.merge(td1, td2));
+                        for (int i = 0; i < t1.numFields(); i++){
+                            mergedTuple.setField(i, t1.getField(i));
+                        }
+                        for (int i = 0; i < t2.numFields(); i++){
+                            mergedTuple.setField(i + t1.numFields(), t2.getField(i));
+                        }
+                        outputBuffer.offer(mergedTuple);
                     }
-                    for (int i = 0; i < t2.numFields(); i++){
-                        mergedTuple.setField(i + t1.numFields(), t2.getField(i));
-                    }
-                    outputBuffer.offer(mergedTuple);
+                    return outputBuffer.poll();
                 }
-                return outputBuffer.poll();
+            }
+        } else {
+            while (this.child1.hasNext() || this.t != null) {
+                if (this.child1.hasNext() && this.t == null) {
+                    this.t = this.child1.next();
+                }
+                while (this.child2.hasNext()) {
+                    Tuple t2 = this.child2.next();
+                    if (this.p.filter(t, t2)) {
+                        TupleDesc td1 = t.getTupleDesc();
+                        TupleDesc td2 = t2.getTupleDesc();
+                        TupleDesc newTd = TupleDesc.merge(td1, td2);
+                        Tuple newTuple = new Tuple(newTd);
+                        newTuple.setRecordId(t.getRecordId());
+                        int index = 0;
+                        for (int i = 0; i < td1.numFields(); i++)
+                            newTuple.setField(index++, t.getField(i));
+                        for (int j = 0; j < td2.numFields(); j++)
+                            newTuple.setField(index++, t2.getField(j));
+                        return newTuple;
+                    }
+                }
+                this.child2.rewind();
+                this.t = null;
             }
         }
         return null;

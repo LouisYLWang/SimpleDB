@@ -15,6 +15,7 @@ public class IntegerAggregator implements Aggregator {
     private Op what;
     protected HashMap<Field, Integer> gbHash;
     protected HashMap<Field, int[]> gbAvgHash;
+    private Field nonGbKey;
 
     /**
      * Aggregate constructor
@@ -39,8 +40,7 @@ public class IntegerAggregator implements Aggregator {
         this.afield = afield;
         this.gbAvgHash = new HashMap<>();
         this.gbHash = new HashMap<>();
-
-
+        this.nonGbKey = null;
     }
 
     /**
@@ -52,16 +52,19 @@ public class IntegerAggregator implements Aggregator {
      */
     public void mergeTupleIntoGroup(Tuple tup) {
         // some code goes here
-        IntField curGbField;
+        Field curGbField;
         IntField curAgField;
         int curCountVal;
         int curSumVal;
 
         if (gbfield == Aggregator.NO_GROUPING){
+            //if (this.nonGbKey == null){
+            //    this.nonGbKey = tup.getField(afield);
+            //}
             curGbField = null;
         }
         else {
-            curGbField = (IntField) tup.getField(gbfield);
+            curGbField = tup.getField(gbfield);
         }
 
         curAgField = (IntField) tup.getField(afield);
@@ -133,33 +136,44 @@ public class IntegerAggregator implements Aggregator {
 
             @Override
             public void open() throws DbException, TransactionAbortedException {
-                if (what != Op.AVG){
-                    agValArr = new Tuple[gbHash.size()];
-                    td = new TupleDesc(new Type[]{gbfieldtype, Type.INT_TYPE});
-                    int i = 0;
-                    for (Field gbField: gbHash.keySet()){
-                        Tuple curTuple = new Tuple(td);
-                        curTuple.setField(0, gbField);
-                        curTuple.setField(1, new IntField(gbHash.get(gbField)));
-                        agValArr[i] = curTuple;
-                        i++;
+                if (gbfield == Aggregator.NO_GROUPING) {
+                    agValArr = new Tuple[1];
+                    td = new TupleDesc(new Type[]{Type.INT_TYPE});
+                    Tuple curTuple = new Tuple(td);
+                    if (what != Op.AVG) {
+                        curTuple.setField(0, new IntField(gbHash.get(nonGbKey)));
+                    } else {
+                        int avg = gbAvgHash.get(nonGbKey)[0] / gbAvgHash.get(nonGbKey)[1];
+                        curTuple.setField(0, new IntField(avg));
                     }
-                }else{
-                    agValArr = new Tuple[gbAvgHash.size()];
-
-                    td = new TupleDesc(new Type[]{gbfieldtype, Type.INT_TYPE});
-                    int i = 0;
-                    for (Field gbField: gbAvgHash.keySet()){
-                        Tuple curTuple = new Tuple(td);
-                        curTuple.setField(0, gbField);
-                        int avg = gbAvgHash.get(gbField)[0] / gbAvgHash.get(gbField)[1];
-                        curTuple.setField(1, new IntField(avg));
-                        agValArr[i] = curTuple;
-                        i++;
+                    agValArr[0] = curTuple;
+                }
+                else {
+                    if (what != Op.AVG){
+                        agValArr = new Tuple[gbHash.size()];
+                        td = new TupleDesc(new Type[]{gbfieldtype, Type.INT_TYPE});
+                        int i = 0;
+                        for (Field gbField: gbHash.keySet()){
+                            Tuple curTuple = new Tuple(td);
+                            curTuple.setField(0, gbField);
+                            curTuple.setField(1, new IntField(gbHash.get(gbField)));
+                            agValArr[i] = curTuple;
+                            i++;
+                        }
+                    }else{
+                        agValArr = new Tuple[gbAvgHash.size()];
+                        td = new TupleDesc(new Type[]{gbfieldtype, Type.INT_TYPE});
+                        int i = 0;
+                        for (Field gbField: gbAvgHash.keySet()){
+                            Tuple curTuple = new Tuple(td);
+                            curTuple.setField(0, gbField);
+                            int avg = gbAvgHash.get(gbField)[0] / gbAvgHash.get(gbField)[1];
+                            curTuple.setField(1, new IntField(avg));
+                            agValArr[i] = curTuple;
+                            i++;
+                        }
                     }
                 }
-
-
             }
 
             @Override
