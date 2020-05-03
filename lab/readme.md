@@ -14,15 +14,15 @@ Since I am not a student of CSE section, I can not get access to _attu_, hence t
 
 - **query 1**
 
-![query 1 result](.\resource\lab2-1.png)
+![query 1 result](/lab/resource/lab2-1.png)
 
 - **query 2**
 
-![query 2 result](.\resource\lab2-2.png)
+![query 2 result](/lab/resource/lab2-2.png)
 
 - **query** 3
 
-![query 3 result](.\resource\lab2-3.png)
+![query 3 result](/lab/resource/lab2-3.png)
 
 ### Demonstrate your understanding
 
