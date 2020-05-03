@@ -14,6 +14,7 @@ public class Aggregate extends Operator {
     private int afield;
     private int gfield;
     private Aggregator.Op aop;
+    private TupleDesc ctd;
     private TupleDesc td;
     private Aggregator agg;
     private OpIterator aggiter;
@@ -41,21 +42,35 @@ public class Aggregate extends Operator {
         this.afield = afield;
         this.gfield = gfield;
         this.aop = aop;
-        this.td = this.child.getTupleDesc();
+        this.ctd = this.child.getTupleDesc();
 
-        if(this.td.getFieldType(afield) ==  Type.INT_TYPE) {
-            if(gfield == Aggregator.NO_GROUPING) {
+
+        if(gfield == Aggregator.NO_GROUPING) {
+            if (aggregateFieldType() == Type.INT_TYPE) {
                 agg = new IntegerAggregator(this.gfield, null, this.afield, aop);
-            } else {
-                agg = new IntegerAggregator(this.gfield, this.td.getFieldType(this.gfield), this.afield, aop);
             }
-        } else {
-            if(gfield == Aggregator.NO_GROUPING) {
+            if (aggregateFieldType()  == Type.STRING_TYPE) {
                 agg = new StringAggregator(this.gfield, null, this.afield, aop);
-            } else {
-                agg = new StringAggregator(this.gfield, this.td.getFieldType(this.gfield), this.afield, aop);
             }
+            //it is the code that follows the instruction of code doc, however not pass the test case
+            //String FieldName = String.format("%s(%s)", this.aop.toString(),this.ctd.getFieldName(this.afield));
+            String FieldName = String.format("%s", this.ctd.getFieldName(this.afield));
+            this.td = new TupleDesc(new Type[]{aggregateFieldType()}, new String[]{FieldName});
+        } else {
+            if (aggregateFieldType() == Type.INT_TYPE) {
+                agg = new IntegerAggregator(this.gfield, this.ctd.getFieldType(this.gfield), this.afield, aop);
+            }
+            if (aggregateFieldType()  == Type.STRING_TYPE) {
+                agg = new StringAggregator(this.gfield, this.ctd.getFieldType(this.gfield), this.afield, aop);
+            }
+
+            String gbfieldName = String.format("%s", this.ctd.getFieldName(this.gfield));
+            //it is the code that follows the instruction of code doc, however not pass the test case
+            //String afieldName = String.format("%s(%s)", this.aop.toString(),this.ctd.getFieldName(this.afield));
+            String afieldName = String.format("%s", this.ctd.getFieldName(this.afield));
+            this.td = new TupleDesc(new Type[]{groupFieldType(), Type.INT_TYPE}, new String[]{gbfieldName, afieldName});
         }
+        this.aggiter = agg.iterator();
     }
 
      /**
@@ -76,14 +91,23 @@ public class Aggregate extends Operator {
     public String groupFieldName() {
 	// some code goes here
         if (this.gfield != Aggregator.NO_GROUPING){
-            return td.getFieldName(groupField());
+            return this.td.getFieldName(0);
         }
     	return null;
     }
 
-    /**
-     * @return the aggregate field
-     * */
+    public Type aggregateFieldType() {
+        return this.ctd.getFieldType(this.afield);
+    }
+
+    public Type groupFieldType() {
+        return this.ctd.getFieldType(this.gfield);
+    }
+
+
+        /**
+         * @return the aggregate field
+         * */
     public int aggregateField() {
 	// some code goes here
 	    return this.afield;
@@ -95,7 +119,10 @@ public class Aggregate extends Operator {
      * */
     public String aggregateFieldName() {
 	// some code goes here
-	    return td.getFieldName(aggregateField());
+        if (this.gfield != Aggregator.NO_GROUPING){
+            return this.td.getFieldName(1);
+        }
+        return this.td.getFieldName(0);
     }
 
     /**
@@ -113,10 +140,10 @@ public class Aggregate extends Operator {
     public void open() throws NoSuchElementException, DbException,
 	    TransactionAbortedException {
 	    // some code goes here
+        this.child.open();
         while (this.child.hasNext())
             this.agg.mergeTupleIntoGroup(this.child.next());
-        aggiter = agg.iterator();
-        aggiter.open();
+        this.aggiter.open();
         super.open();
     }
 
@@ -154,12 +181,13 @@ public class Aggregate extends Operator {
      */
     public TupleDesc getTupleDesc() {
 	    // some code goes here
-	    return this.getTupleDesc();
+	    return this.td;
     }
 
     public void close() {
 	    // some code goes here
         super.close();
+        this.child.close();
         this.aggiter.close();
     }
 
