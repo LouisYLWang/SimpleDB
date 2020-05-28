@@ -1,68 +1,53 @@
-Yiliang Wang
+Yiliang Wang 
 
-CSE 444
+CSE 444 
 
-LAB 2 WRITE-UP
-
-### Runtime of queries
-
-Since I am not a student of CSE section, I can not get access to _attu_, hence the runtime are all from my laptop (i7-10510U 16GB RAM)
-
-- **query 1** 0.41s
-- **query 2** 1.11s
-- **query 3** 1.52s
-
-- **query 1**
-
-![query 1 result](/lab/resource/lab2-1.png)
-
-- **query 2**
-
-![query 2 result](/lab/resource/lab2-2.png)
-
-- **query** 3
-
-![query 3 result](/lab/resource/lab2-3.png)
+LAB 3 WRITE-UP
 
 ### Demonstrate your understanding
 
-The main goal of Lab 2 is to implement the operators & aggregators, whole picture is:
+The main goal of Lab 3 is to implement the Transactions functionality of the simple DB using NO STEAL and FORCE  buffer management policy in the granularity of page level. NO STEAL means the eviction of dirty pages only happened after a transaction is committed. FORCE means the dirty pages are forced to flush to disk after a transaction is committed.
 
-- Relational algebra:
+The whole picture of the lab is:
 
-  - Filter
-  - Join
-  - Aggregates
-    - Integer & String
+- LockManager:
+  - LockOnPage: class to organize locks on specific page
+  - locks hashmap: locks store - link page to LockOnPage, use for find lock on specific page
+  - transaction hashmap: transaction store - link transaction to page it lock
+  - waitForGraph: use for deadlock detection
+  - acquire / upgrade: acquire read/write lock and upgrade read lock 
+  - detectDeadlock(): detect deadlock
+  - release(): release all lock of a transaction
+- BufferPool:
+  - getPage(): add aquire lock before getting file from disk
+  - transactionComplete: NO STEAL and FORCE part of policy
+  - adjustment of evictPage: NO STEAL part of policy
+  - *releasePage()
+  - *holdsLock() (does not use this function for determine whether a page is already locked by a transaction)
 
-- Mutability:
+This lab mainly implement the a lockManager to manage locks on page, to be able to acquire/upgrade/release lock when possible (no deadlock). And make some adjustment to the bufferPool to make it support the concurrency features:
 
-  - Insertion
-    - eviction
-  - Deletion
+- LockManager: 
 
-This lab mainly implement the skeletons functions of main components of SimpleDB to enable the database to achieve bellowed functionalities:
+  When I implement this part, I does not implement a class of lock specifically, instead, I implement a page unit of locks to make the interaction of other function more straightforward (many manipulation of locks on page are organized on a single page level.) And my implementation of acquire is pretty straightforward, the function will repeatedly attempt to acquire lock according to the permission, and if no deadlock is detected. To decide when and how to acquire which kind of lock, I use nested if conditions to first decide whether there is a exclusive lock on a page, and then if the current transaction need read_write permission, it might only choose to upgrade, and if it need read permission, it can safe to acquire if no exclusive lock on that page. And for deadlock detection, I use both the policies of dependency graph and timeout. For dependency graph, I keep a map of the wait-for relationship between pairs of transactions and use a breadth-first search based algorithm to test whether the graph is acyclic. 
 
-- Predicate & Join Predicate : predicate is like a encapsulation of the operands and the comparative operator to field(s) that operations call to make specific comparison as condition. Predicate is for uniary comparison for filter operation and join predicate is for binary comparison for join operation.
-- Filter: operation to filter out tuples. It iteratively fetch next tuple from single child OpIterator and use predication.filter to test the if the condition is hit for the tuples.
-- Join: operation to merge tuples together. It iteratively fetch next tuple from the two children OpIterator and join the tuple together from calling JoinPredication. I implement two way of join, and if the join condition is equal, the function uses hash join and if the join condition is comparative, the function uses nested loop join.
-- Aggregate / IntegerAggregator / StringAggregator: operation to get aggregated value of a relation. groupby is the operation to define the observation group of each aggregate calculation. As the other operator, it fetch next tuple from it child and update the aggregated value to the temp store (hashmap).
-- Insertion / deletion: insert and delete are two key operator to make db to modify tuple in tables. The lab implement three levels of insertion/deletion operation from tuple to file (to bufferpool) to page. For each level, we need to specifically deal with the effect of insert or delete (change header page correspondingly at page level, trace the modified page and add/remove page at file level, and reflect the change at bufferpool and evict page if bufferpool is full etc.)
-- sideworks: to prepare for the transaction and concurrent features, the lab also add dirty label and release page back to disk. For evict policy, I choose the randomized eviction.
+- BufferPool:
 
-### Design decisions:
+  All the changes are pretty straight forward, just add the support for the lock system. These change includes add the lock acquire before read a page; detect whether the page are dirty before evict a page; flush and release all lock when transaction is completed whether it is committed or abort.
 
-As I mentioned above, I choose a combination of nested loop join and hash join, and I choose randomized page eviction policy. The trade-off of adding hash join along side with nested loop join is space, because when the join operator is opened, whether the future join condition is equal or not, my solution will always read child 1 into a hashMap, and add an queue for outputBuffer, which will cost more space in exchange for a quicker equal-condition join.
+### Design decisions (Perhap a chance for bonus?):
+
+As I mentioned above, I attempted to implement both policy for deadlock detection. However, none of the two version finished all the test case. But dependency graphs pass more test case compare to timeouts policy, in a much faster speed. The detail of lock manager design are stated above. 
 
 ### Extra unit test:
 
-- Actually because of the error when I add the Query Parser, I found a bug in Catalog which does not been tested in test cases. My tableIdIterator() method had a wrong return condition, so maybe is better to cover the test for tableIdIterator in unit test for better debugging in the future.
-- It makes me very confused to the mismatch between aggregate unit test case and the java doc. In Aggregate getTupleDesc(), we are required to make aggregate column name informative, so to meet this requirement, I combined the name of afield with Aggregator operations type, but it makes me failed the test case. I guess it probably because there are null TupleDesc for the child level, and the TupleDesc constructor allows for null field name. But at this case, my aggregate field informatively got the name of "sum(null)", and it is conflict with the assertion condition in aggregate unit test. If the test case considers this situation, it would be better for debugging in the future.
+- I suggest to add a unit test to check whether the lock is added by same transaction when evict and acquire. Because initially I encounter with this issue but unit test case does not address that issue. So some time are wasted when I debugging the deadlock detection.
 
-### Api change:
+### Api  change:
 
-​ no change
+​	no change
 
-### Missing or incomplete elements of your code:
+### Missing or incomplete elements of your code: 
 
-​ No missing elements for lab 2
+​	No missing elements, but failed testTenThreads and testFiveThreads two test cases, I am not sure where are the problems in my code. I test and the deadlock detection algorithm can correctly detect deadlock and abort correspondingly. 
+
