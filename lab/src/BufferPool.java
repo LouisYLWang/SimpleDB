@@ -3,6 +3,8 @@ package simpledb;
 import java.io.*;
 
 import java.util.ArrayList;
+import java.util.HashSet;
+import java.util.LinkedList;
 import java.util.Random;
 import java.util.concurrent.ConcurrentHashMap;
 
@@ -24,11 +26,12 @@ public class BufferPool {
     private static int pageSize = DEFAULT_PAGE_SIZE;
 
     /** Default number of pages passed to the constructor. This is used by
-    other classes. BufferPool should use the numPages argument to the
-    constructor instead. */
+     other classes. BufferPool should use the numPages argument to the
+     constructor instead. */
     public static final int DEFAULT_PAGES = 50;
     private int numPages;
     private ConcurrentHashMap<PageId, Page> pages;
+    private LockManager lockManager;
 
     /**
      * Creates a BufferPool that caches up to numPages pages.
@@ -38,21 +41,23 @@ public class BufferPool {
     public BufferPool(int numPages) {
         // some code goes here
         this.numPages = numPages;
-        this.pages = new ConcurrentHashMap<PageId, Page>();
+        this.pages = new ConcurrentHashMap<>();
+        this.lockManager = new LockManager();
+
     }
 
     public static int getPageSize() {
-      return pageSize;
+        return pageSize;
     }
 
     // THIS FUNCTION SHOULD ONLY BE USED FOR TESTING!!
     public static void setPageSize(int pageSize) {
-    	BufferPool.pageSize = pageSize;
+        BufferPool.pageSize = pageSize;
     }
 
     // THIS FUNCTION SHOULD ONLY BE USED FOR TESTING!!
     public static void resetPageSize() {
-    	BufferPool.pageSize = DEFAULT_PAGE_SIZE;
+        BufferPool.pageSize = DEFAULT_PAGE_SIZE;
     }
 
     /**
@@ -73,15 +78,23 @@ public class BufferPool {
     public Page getPage(TransactionId tid, PageId pid, Permissions perm)
             throws TransactionAbortedException, DbException {
         // some code goes here
+        if (this.pages.size() >= numPages) {
+            this.evictPage();
+        }
+
+        try {
+            this.lockManager.acquire(tid, pid, perm);
+        } catch (InterruptedException e) {
+            e.printStackTrace();
+        }
+
         if (!this.pages.containsKey(pid)){
             int tableId = pid.getTableId();
             Catalog catalog = Database.getCatalog();
-            Page block = catalog.getDatabaseFile(tableId).readPage(pid);
-            if (this.pages.size() == numPages) {
-                this.evictPage();
-            }
-            this.pages.put(pid, block);
-            return block;
+            Page page = catalog.getDatabaseFile(tableId).readPage(pid);
+
+            this.pages.put(pid, page);
+            return page;
         }
         return this.pages.get(pid);
     }
@@ -95,9 +108,10 @@ public class BufferPool {
      * @param tid the ID of the transaction requesting the unlock
      * @param pid the ID of the page to unlock
      */
-    public  void releasePage(TransactionId tid, PageId pid) {
+    public synchronized void releasePage(TransactionId tid, PageId pid) {
         // some code goes here
         // not necessary for lab1|lab2
+        this.lockManager.release(tid, pid);
     }
 
     /**
@@ -108,13 +122,14 @@ public class BufferPool {
     public void transactionComplete(TransactionId tid) throws IOException {
         // some code goes here
         // not necessary for lab1|lab2
+        transactionComplete(tid, true);
     }
 
     /** Return true if the specified transaction has a lock on the specified page */
-    public boolean holdsLock(TransactionId tid, PageId p) {
+    public boolean holdsLock(TransactionId tid, PageId pid) {
         // some code goes here
         // not necessary for lab1|lab2
-        return false;
+        return this.lockManager.isLocked(tid, pid);
     }
 
     /**
@@ -125,10 +140,24 @@ public class BufferPool {
      * @param commit a flag indicating whether we should commit or abort
      */
     public void transactionComplete(TransactionId tid, boolean commit)
-        throws IOException {
+            throws IOException {
         // some code goes here
         // not necessary for lab1|lab2
+        HashSet<PageId> pagesToRecover = this.lockManager.transactions.get(tid);
+        for (PageId pid: pagesToRecover){
+            if (this.pages.containsKey(pid)){
+                Page page = this.pages.get(pid);
+                Database.getLogFile().logWrite(tid, page.getBeforeImage(), page);
+                Database.getLogFile().force();
+                page.setBeforeImage();
+                if(!commit){
+                    this.pages.replace(pid, page.getBeforeImage());
+                }
+            }
+        }
+        this.lockManager.releaseAll(tid);
     }
+
 
     /**
      * Add a tuple to the specified table on behalf of transaction tid.  Will
@@ -146,7 +175,7 @@ public class BufferPool {
      * @param t the tuple to add
      */
     public void insertTuple(TransactionId tid, int tableId, Tuple t)
-        throws DbException, IOException, TransactionAbortedException {
+            throws DbException, IOException, TransactionAbortedException {
         // some code goes here
         // not necessary for lab1
         HeapFile hpFile = (HeapFile) Database.getCatalog().getDatabaseFile(tableId);
@@ -175,7 +204,7 @@ public class BufferPool {
      * @param t the tuple to delete
      */
     public  void deleteTuple(TransactionId tid, Tuple t)
-        throws DbException, IOException, TransactionAbortedException {
+            throws DbException, IOException, TransactionAbortedException {
         // some code goes here
         // not necessary for lab1
         int tableId = t.getRecordId().getPageId().getTableId();
@@ -198,17 +227,16 @@ public class BufferPool {
         for (PageId pid: this.pages.keySet()){
             this.flushPage(pid);
         }
-
     }
 
     /** Remove the specific page id from the buffer pool.
-        Needed by the recovery manager to ensure that the
-        buffer pool doesn't keep a rolled back page in its
-        cache.
+     Needed by the recovery manager to ensure that the
+     buffer pool doesn't keep a rolled back page in its
+     cache.
 
-        Also used by B+ tree files to ensure that deleted pages
-        are removed from the cache so they can be reused safely
-    */
+     Also used by B+ tree files to ensure that deleted pages
+     are removed from the cache so they can be reused safely
+     */
     public synchronized void discardPage(PageId pid) {
         // some code goes here
         // not necessary for lab1
@@ -222,13 +250,15 @@ public class BufferPool {
     private synchronized  void flushPage(PageId pid) throws IOException {
         // some code goes here
         // not necessary for lab1
+        Page page = pages.get(pid);
         if (pages.containsKey(pid)){
-            Page pg = pages.get(pid);
-            TransactionId tid = pg.isDirty();
-            if (tid != null){
+            TransactionId dirtier = page.isDirty();
+            if (dirtier != null){
+                Database.getLogFile().logWrite(dirtier, page.getBeforeImage(), page);
+                Database.getLogFile().force();
                 HeapFile f = (HeapFile ) Database.getCatalog().getDatabaseFile(pid.getTableId());
-                f.writePage(pg);
-                pg.markDirty(false, null);
+                f.writePage(page);
+                page.markDirty(false, null);
             }
         }
     }
@@ -238,6 +268,11 @@ public class BufferPool {
     public synchronized  void flushPages(TransactionId tid) throws IOException {
         // some code goes here
         // not necessary for lab1|lab2
+        for (Page p : this.pages.values()) {
+            if (tid.equals(p.isDirty())) {
+                flushPage(p.getId());
+            }
+        }
     }
 
     /**
@@ -252,8 +287,7 @@ public class BufferPool {
         PageId pageId = arrayList.get(randomId);
         try {
             flushPage(pageId);
-        } catch (IOException e) {}
+        } catch (IOException ignored) {}
         pages.remove(pageId);
     }
-
 }

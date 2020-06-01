@@ -1,68 +1,48 @@
-Yiliang Wang
+Yiliang Wang 
 
-CSE 444
+CSE 444 
 
-LAB 2 WRITE-UP
-
-### Runtime of queries
-
-Since I am not a student of CSE section, I can not get access to _attu_, hence the runtime are all from my laptop (i7-10510U 16GB RAM)
-
-- **query 1** 0.41s
-- **query 2** 1.11s
-- **query 3** 1.52s
-
-- **query 1**
-
-![query 1 result](/lab/resource/lab2-1.png)
-
-- **query 2**
-
-![query 2 result](/lab/resource/lab2-2.png)
-
-- **query** 3
-
-![query 3 result](/lab/resource/lab2-3.png)
+LAB 4: Rollback and Recovery
 
 ### Demonstrate your understanding
 
-The main goal of Lab 2 is to implement the operators & aggregators, whole picture is:
+The main goal of Lab 4 is to implement the log-based rollback and recovery. This lab changes the buffer management policy to FORCE to NOFORCE, that means the dirty page will not be forced to flush to disk after commit. This give simpleDB more flexibility and efficiency to avoid the unnecessary output to disk. And inhered from the page-level lock management, the logging also happen on whole page, that means if a page is modified by a update operation, the after image of the whole page will be logged to the record. 
 
-- Relational algebra:
+The whole picture of the lab is:
 
-  - Filter
-  - Join
-  - Aggregates
-    - Integer & String
+- Rollback
+  - CLR record: define a new type of record consists of
+    - record type (INT)
+    - transaction id (LONG)
+    - undo target log start offset (LONG)
+    - start offset (LONG)
+  - undo: iterate through the log and setting the state of specific  pages it updated to their pre-updated state
 
-- Mutability:
-
-  - Insertion
-    - eviction
-  - Deletion
-
-This lab mainly implement the skeletons functions of main components of SimpleDB to enable the database to achieve bellowed functionalities:
-
-- Predicate & Join Predicate : predicate is like a encapsulation of the operands and the comparative operator to field(s) that operations call to make specific comparison as condition. Predicate is for uniary comparison for filter operation and join predicate is for binary comparison for join operation.
-- Filter: operation to filter out tuples. It iteratively fetch next tuple from single child OpIterator and use predication.filter to test the if the condition is hit for the tuples.
-- Join: operation to merge tuples together. It iteratively fetch next tuple from the two children OpIterator and join the tuple together from calling JoinPredication. I implement two way of join, and if the join condition is equal, the function uses hash join and if the join condition is comparative, the function uses nested loop join.
-- Aggregate / IntegerAggregator / StringAggregator: operation to get aggregated value of a relation. groupby is the operation to define the observation group of each aggregate calculation. As the other operator, it fetch next tuple from it child and update the aggregated value to the temp store (hashmap).
-- Insertion / deletion: insert and delete are two key operator to make db to modify tuple in tables. The lab implement three levels of insertion/deletion operation from tuple to file (to bufferpool) to page. For each level, we need to specifically deal with the effect of insert or delete (change header page correspondingly at page level, trace the modified page and add/remove page at file level, and reflect the change at bufferpool and evict page if bufferpool is full etc.)
-- sideworks: to prepare for the transaction and concurrent features, the lab also add dirty label and release page back to disk. For evict policy, I choose the randomized eviction.
+- Recover: recover the commit state of the while database, redo the committed page and undo the uncommitted page
+  - redo: iterate through the log and setting the state of specific  pages it updated to their updated state
+- Other:
+  - BufferPool change to accommodate NOFORCE policy:
+    - evictPage(): remove the dirty-page check before flushing a page to make more space
+    - transactionComplete(): add logging of the writeLog
 
 ### Design decisions:
 
-As I mentioned above, I choose a combination of nested loop join and hash join, and I choose randomized page eviction policy. The trade-off of adding hash join along side with nested loop join is space, because when the join operator is opened, whether the future join condition is equal or not, my solution will always read child 1 into a hashMap, and add an queue for outputBuffer, which will cost more space in exchange for a quicker equal-condition join.
+- CLR record: 
+  - I does not follows the pattern of logWrite, which write the whole page images before and after to the log. Instead, I just write offset of the target undo record to the CLR record (as in the slide), so the file pointer will temporarily seek back to the offset before and undo the change.
+- Undo:
+  - I merged the undo of single transaction in rollback and the undo of multiple transactions in recovery together
+  - To achieve the forward scan followed by a backward undo, I define a CompensateRecord class to encapsulate the transactionID, offset of the target undo record and page image together so that it can bind together and easy to manipulate by stack. 
 
 ### Extra unit test:
 
-- Actually because of the error when I add the Query Parser, I found a bug in Catalog which does not been tested in test cases. My tableIdIterator() method had a wrong return condition, so maybe is better to cover the test for tableIdIterator in unit test for better debugging in the future.
-- It makes me very confused to the mismatch between aggregate unit test case and the java doc. In Aggregate getTupleDesc(), we are required to make aggregate column name informative, so to meet this requirement, I combined the name of afield with Aggregator operations type, but it makes me failed the test case. I guess it probably because there are null TupleDesc for the child level, and the TupleDesc constructor allows for null field name. But at this case, my aggregate field informatively got the name of "sum(null)", and it is conflict with the assertion condition in aggregate unit test. If the test case considers this situation, it would be better for debugging in the future.
+- I may contribute no more extra unite test, but I have a question, it is possible to simplify the test cases by not sequentially scan through the Heap file but just compare the expect and the actual log file? I think both way should work and scan the log   may avoid some input from disk. (Oh I see, the test cases need to provide tuple level test)
 
-### Api change:
+### API  change:
 
-​ no change
+- public class add: logCompensate
+- public method add: undo
 
-### Missing or incomplete elements of your code:
+### Missing or incomplete elements of your code: 
 
-​ No missing elements for lab 2
+​	No missing elements
+
