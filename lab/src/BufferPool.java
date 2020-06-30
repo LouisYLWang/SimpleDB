@@ -144,6 +144,9 @@ public class BufferPool {
         // some code goes here
         // not necessary for lab1|lab2
         HashSet<PageId> pagesToRecover = this.lockManager.transactions.get(tid);
+        if (pagesToRecover == null){
+            return;
+        }
         for (PageId pid: pagesToRecover){
             if (this.pages.containsKey(pid)){
                 Page page = this.pages.get(pid);

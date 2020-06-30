@@ -111,7 +111,11 @@ public class JoinOptimizer {
             // HINT: You may need to use the variable "j" if you implemented
             // a join algorithm that's more complicated than a basic
             // nested-loops join.
-            return -1.0;
+            if (j.p == Predicate.Op.EQUALS){
+                return cost1 + cost2 + card1;
+            } else {
+                return cost1 + card1 * cost2 + card1 * card2;
+            }
         }
     }
 
@@ -157,7 +161,24 @@ public class JoinOptimizer {
             Map<String, Integer> tableAliasToId) {
         int card = 1;
         // some code goes here
-        return card <= 0 ? 1 : card;
+        if (joinOp == Predicate.Op.EQUALS){
+            if (t1pkey){
+                return card2;
+            } else if (t2pkey){
+                return card1;
+            }
+        }
+        int table1ID = tableAliasToId.get(table1Alias);
+        int table2ID = tableAliasToId.get(table2Alias);
+
+        String table1Name = Database.getCatalog().getTableName(table1ID);
+        String table2Name = Database.getCatalog().getTableName(table2ID);
+        int field1ID = Database.getCatalog().getTupleDesc(table1ID).fieldNameToIndex(field1PureName);
+        int field2ID = Database.getCatalog().getTupleDesc(table2ID).fieldNameToIndex(field2PureName);
+
+        int distinctFieldValNum1 = stats.get(table1Name).getDistinctVal(field1ID);
+        int distinctFieldValNum2 = stats.get(table2Name).getDistinctVal(field2ID);
+        return (int) (1.0/(Math.max(distinctFieldValNum1, distinctFieldValNum2)) * card1 * card2);
     }
 
     /**
@@ -213,15 +234,37 @@ public class JoinOptimizer {
      *             when stats or filter selectivities is missing a table in the
      *             join, or or when another internal error occurs
      */
-    public Vector<LogicalJoinNode> orderJoins(
-            HashMap<String, TableStats> stats,
-            HashMap<String, Double> filterSelectivities, boolean explain)
-            throws ParsingException {
+    public Vector<LogicalJoinNode> orderJoins(HashMap<String, TableStats> stats,
+                                              HashMap<String, Double> filterSelectivities,
+                                              boolean explain) throws ParsingException
+    {
         //Not necessary for labs 1--3
 
         // some code goes here
         //Replace the following
-        return joins;
+        final PlanCache cache = new PlanCache();
+        for (int len=1; len<=joins.size(); len++) {
+            final Set<Set<LogicalJoinNode>> subsets = enumerateSubsets(joins, len);
+            for (Set<LogicalJoinNode> s : subsets) {
+                CostCard bestPlan = null;
+                for (LogicalJoinNode node : s) {
+                    CostCard curSubplan = computeCostAndCardOfSubplan(stats, filterSelectivities, node, s,
+                            null == bestPlan? Double.POSITIVE_INFINITY: bestPlan.cost, cache);
+                    if (null == curSubplan) {
+                        continue;
+                    } else if (null == bestPlan || bestPlan.cost > curSubplan.cost) {
+                        bestPlan = curSubplan;
+                    }
+                }
+                if (null != bestPlan) {
+                    cache.addPlan(s, bestPlan.cost, bestPlan.card, bestPlan.plan);
+                }
+            }
+        }
+        if (explain) {
+            printJoins(joins, cache, stats, filterSelectivities);
+        }
+        return cache.getOrder(new HashSet<>(joins));
     }
 
     // ===================== Private Methods =================================

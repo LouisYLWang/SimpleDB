@@ -3,151 +3,188 @@ package simpledb;
 import java.util.*;
 import java.util.concurrent.ConcurrentHashMap;
 
-/**
- * LockManager keeps track of which locks each transaction holds and checks to see if a lock should be granted to a
- * transaction when it is requested.
- */
+
 public class LockManager {
-    public ConcurrentHashMap<PageId, LocksOnPage> locks;
-    public ConcurrentHashMap<TransactionId, HashSet<PageId>> transactions;
-    public ConcurrentHashMap<TransactionId, HashSet<TransactionId>> waitForGraph;
+    public HashMap<PageId, LocksOnPage> locks;
+    public HashMap<TransactionId, HashSet<PageId>> transactions;
+    public HashMap<TransactionId, HashSet<TransactionId>> waitForGraph;
 
-    private class LocksOnPage {
-        private final LockManager lockManager;
-        final PageId pageId;
-        Permissions permissions;
-        final HashSet<TransactionId> lockedBy;
-        final HashSet<TransactionId> waitedBy;
+    class LocksOnPage{
+        private TransactionId exclusiveLock;
+        private HashSet<TransactionId> sharedLocks;
 
-        LocksOnPage(LockManager lockManager, PageId pid, TransactionId tid, Permissions perm) {
-            this.lockManager = lockManager;
-            this.pageId = pid;
-            this.permissions = perm;
-            HashSet<TransactionId> s = new HashSet<>();
-            s.add(tid);
-            this.lockedBy = s;
-            this.waitedBy = new HashSet<>();
+        LocksOnPage(){
+            this.exclusiveLock = null;
+            this.sharedLocks = new HashSet<>();
         }
 
-        private boolean canAcquire(TransactionId tid, Permissions perm) {
-            if (this.permissions == Permissions.READ_ONLY) {
-                if (perm == Permissions.READ_ONLY) {
-                    return true;
-                } else if (perm == Permissions.READ_WRITE) {
-                    return this.lockedBy.size() == 1 && this.lockedBy.contains(tid);
-                }
-            } else if (this.permissions == Permissions.READ_WRITE) {
-                return this.lockedBy.contains(tid);
-            }
-            return true;
+        public Boolean hasExclusiveLock(){
+            return this.exclusiveLock != null;
         }
 
-        synchronized void lock(TransactionId tid, Permissions perm) throws InterruptedException, TransactionAbortedException {
-            while (!canAcquire(tid, perm)) {
-                this.lockManager.addToWaitForGraph(tid, this);
-                this.waitedBy.add(tid);
-                if (this.lockManager.detectDeadLock()) {
-                    this.lockedBy.remove(tid);
-                    this.waitedBy.remove(tid);
-                    this.lockManager.removeFromWaitForGraph(tid, this.waitedBy);
-                    notifyAll();
-                    throw new TransactionAbortedException();
-                }
-                wait();
-            }
-
-            this.permissions = perm;
-            this.lockedBy.add(tid);
-            this.waitedBy.remove(tid);
-            for (TransactionId waiter : this.waitedBy) {
-                this.lockManager.addToWaitForGraph(waiter, this);
-            }
-            this.lockManager.registerTransaction(tid, this.pageId);
+        public Boolean hasSharedLocks(){
+            return this.sharedLocks.isEmpty();
         }
 
-        synchronized void unlock(TransactionId tid) {
-            this.lockedBy.remove(tid);
-            if (this.lockedBy.isEmpty()) {
-                this.permissions = null;
+        public TransactionId getExclusiveLock(){
+            return this.exclusiveLock;
+        }
+
+        public HashSet<TransactionId> getSharedLocks(){
+            return this.sharedLocks;
+        }
+
+        public void addExclusiveLock(TransactionId tid){
+            this.exclusiveLock = tid;
+        }
+
+        public void addSharedLocks(TransactionId tid){
+            this.sharedLocks.add(tid);
+        }
+
+        public void removeExclusiveLock(TransactionId tid){
+            if (exclusiveLock == tid){
+                this.exclusiveLock = null;
             }
-            this.lockManager.removeFromWaitForGraph(tid, this.waitedBy);
-            this.lockManager.removeTransaction(tid, this.pageId);
-            notifyAll();
+        }
+
+        public void removeSharedLocks(TransactionId tid){
+            if (sharedLocks.contains(tid)){
+                sharedLocks.remove(tid);
+            }
         }
     }
-
 
     public LockManager() {
-        this.locks = new ConcurrentHashMap<>();
-        this.transactions = new ConcurrentHashMap<>();
-        this.waitForGraph = new ConcurrentHashMap<>();
+        locks = new HashMap<>();
+        transactions = new HashMap<>();
+        waitForGraph = new HashMap<>();
     }
 
-    private synchronized void registerTransaction(TransactionId tid, PageId pid) {
-        HashSet<PageId> pageSet = this.transactions.get(tid);
-        if (pageSet == null) {
-            pageSet = new HashSet<>();
-            this.transactions.put(tid, pageSet);
+    public synchronized void acquire(TransactionId tid, PageId pid, Permissions perm) throws TransactionAbortedException, InterruptedException {
+        this.locks.putIfAbsent(pid, new LocksOnPage());
+        this.transactions.putIfAbsent(tid, new HashSet<>());
+        LocksOnPage curLocksSetOnPage = this.locks.get(pid);
+
+        while (this.isLocked(pid)){
+            if (!curLocksSetOnPage.hasExclusiveLock()){
+                if (perm.equals(Permissions.READ_WRITE)){
+                    if (curLocksSetOnPage.getSharedLocks().contains(tid)){
+                        if (upgrade(tid, pid)) {
+                            return;
+                        }
+                    }
+                    this.waitForGraph.putIfAbsent(tid, new HashSet<>());
+                    for(TransactionId waitForTid:curLocksSetOnPage.getSharedLocks()){
+                        if (waitForTid != tid){
+                            this.waitForGraph.get(tid).add(waitForTid);
+                        }
+                    }
+                    if (detectDeadlock()){
+                        for(TransactionId waitForTid:curLocksSetOnPage.getSharedLocks()){
+                            if (waitForTid != tid){
+                                this.waitForGraph.get(tid).remove(waitForTid);
+                            }
+                        }
+                        notifyAll();
+                        throw new TransactionAbortedException();
+                    }
+                } else if (perm.equals(Permissions.READ_ONLY)){
+                    if (isLocked(tid, pid)){
+                        return;
+                    }
+                    curLocksSetOnPage.addSharedLocks(tid);
+                    this.transactions.putIfAbsent(tid, new HashSet<>());
+                    transactions.get(tid).add(pid);
+                    return;
+                }
+            } else {
+                if (curLocksSetOnPage.getExclusiveLock() == tid){
+                    return;
+                } else {
+                    this.waitForGraph.putIfAbsent(tid, new HashSet<>());
+                    this.waitForGraph.get(tid).add(curLocksSetOnPage.getExclusiveLock());
+                    if (detectDeadlock()){
+                        this.waitForGraph.get(tid).remove(curLocksSetOnPage.getExclusiveLock());
+                        notifyAll();
+                        throw new TransactionAbortedException();
+                    }
+                }
+            }
+            wait();
         }
-        pageSet.add(pid);
+
+        if (perm.equals(Permissions.READ_WRITE)) {
+            curLocksSetOnPage.addExclusiveLock(tid);
+        }
+        if (perm.equals(Permissions.READ_ONLY)) {
+            curLocksSetOnPage.addSharedLocks(tid);
+        }
+        this.transactions.putIfAbsent(tid, new HashSet<>());
+        transactions.get(tid).add(pid);
     }
 
-    private synchronized void removeTransaction(TransactionId tid, PageId pid) {
-        HashSet<PageId> pageSet = this.transactions.get(tid);
-        if (pageSet == null) {
-            return;
+    public synchronized Boolean upgrade(TransactionId tid, PageId pid) {
+        LocksOnPage locksOnCurPage = locks.get(pid);
+        if (locksOnCurPage.getSharedLocks().size() == 1) {
+            locksOnCurPage.removeSharedLocks(tid);
+            locksOnCurPage.addExclusiveLock(tid);
+            return true;
         }
-        pageSet.remove(pid);
-        if (pageSet.isEmpty()) {
-            this.transactions.remove(tid);
-        }
+        return false;
     }
 
-    public void acquire(TransactionId tid, PageId pid, Permissions perm) throws TransactionAbortedException {
-        LocksOnPage locksOnPage = this.locks.get(pid);
-        if (locksOnPage == null) {
-            locksOnPage = new LocksOnPage(this, pid, tid, perm);
-            LocksOnPage previous = this.locks.putIfAbsent(pid, locksOnPage);
-            if (previous != null) {
-                locksOnPage = previous;
+    public synchronized Boolean release(TransactionId tid, PageId pid) {
+        if (locks.containsKey(pid)){
+            LocksOnPage locksOnCurPage = locks.get(pid);
+            if (locksOnCurPage.getExclusiveLock() == tid){
+                locksOnCurPage.removeExclusiveLock(tid);
+            }
+            if (locksOnCurPage.getSharedLocks().contains(tid)){
+                locksOnCurPage.removeSharedLocks(tid);
+            }
+            locks.remove(pid);
+            notifyAll();
+            return true;
+        }
+        return false;
+    }
+
+    public synchronized void releaseAll(TransactionId tid) {
+        if (transactions.containsKey(tid)){
+            Iterator<PageId> it = transactions.get(tid).iterator();
+            while (it.hasNext()){
+                PageId pid = it.next();
+                this.release(tid, pid);
+                it.remove();
             }
         }
-
-        try {
-            locksOnPage.lock(tid, perm);
-        } catch (InterruptedException e) {
-            throw new TransactionAbortedException();
-        }
+        waitForGraph.remove(tid);
     }
 
-    public void release(TransactionId tid, PageId pid) {
-        LocksOnPage locksOnPage = this.locks.get(pid);
-        if (locksOnPage != null) {
-            locksOnPage.unlock(tid);
-        }
-    }
-
-    private synchronized void addToWaitForGraph(TransactionId waiter, LocksOnPage locksOnPage) {
-        HashSet<TransactionId> waitees = this.waitForGraph.computeIfAbsent(waiter, k -> new HashSet<>());
-        for (TransactionId t:locksOnPage.lockedBy) {
-            if (!t.equals(waiter)) {
-                waitees.add(t);
+    public synchronized Boolean isLocked(PageId pid) {
+        if (locks.containsKey(pid)){
+            LocksOnPage locksOnCurPage = locks.get(pid);
+            if (locksOnCurPage.getExclusiveLock() != null){
+                return true;
             }
+            return locksOnCurPage.getSharedLocks().size() > 0;
         }
+        return false;
     }
 
-    private synchronized void removeFromWaitForGraph(TransactionId tid, Iterable<TransactionId> waiters) {
-        this.waitForGraph.remove(tid);
-        for (TransactionId waiter:waiters) {
-            HashSet<TransactionId> waiting = this.waitForGraph.get(waiter);
-            if (waiting != null) {
-                waiting.remove(tid);
+    public synchronized Boolean isLocked(TransactionId tid, PageId pid) {
+        if (locks.containsKey(pid)){
+            LocksOnPage locksOnCurPage = locks.get(pid);
+            if (locksOnCurPage.getExclusiveLock() == tid){
+                return true;
             }
+            return locksOnCurPage.getSharedLocks().contains(tid);
         }
+        return false;
     }
 
-
-    public synchronized boolean detectDeadLock() {
+    public synchronized boolean detectDeadlock() throws TransactionAbortedException {
         HashMap<TransactionId, Integer> indegree = new HashMap<>();
         Deque<TransactionId> queue = new LinkedList<>();
 
@@ -158,7 +195,7 @@ public class LockManager {
         for (TransactionId waiterTid: this.transactions.keySet()){
             if (this.waitForGraph.containsKey(waiterTid)){
                 for (TransactionId waiteeTid: this.waitForGraph.get(waiterTid)){
-                    indegree.replace(waiteeTid, indegree.get(waiteeTid) + 1);
+                    indegree.replace(waiteeTid, indegree.get(waiteeTid)+1);
                 }
             }
         }
@@ -179,7 +216,7 @@ public class LockManager {
 
             for (TransactionId waiteeTid: this.waitForGraph.get(waiterTid)){
                 if(indegree.get(waiteeTid) != 0){
-                    indegree.replace(waiteeTid, indegree.get(waiteeTid) - 1);
+                    indegree.replace(waiteeTid, indegree.get(waiteeTid)-1);
                 }
                 if(indegree.get(waiteeTid) == 0) {
                     queue.offer(waiteeTid);
@@ -188,28 +225,8 @@ public class LockManager {
         }
         return count != this.transactions.size();
     }
-
-
-
-    public synchronized boolean isLocked(TransactionId tid, PageId pid) {
-        HashSet<PageId> pageSet = this.transactions.get(tid);
-        return pageSet != null && pageSet.contains(pid);
-    }
-
-    public void releaseAll(TransactionId tid) {
-        Iterator<PageId> it;
-        synchronized (this) {
-            HashSet<PageId> s = this.transactions.remove(tid);
-            if (s == null) {
-                return;
-            }
-            it = s.iterator();
-        }
-
-        while (it.hasNext()) {
-            PageId pid = it.next();
-            it.remove();
-            release(tid, pid);
-        }
-    }
 }
+
+
+
+
