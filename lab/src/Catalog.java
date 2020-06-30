@@ -16,7 +16,7 @@ import java.util.concurrent.ConcurrentHashMap;
  *
  * @Threadsafe
  */
-public class Catalog {
+public class Catalog extends QueryPlanVisualizer {
     private ConcurrentHashMap<Integer, Table> dbFilesMap;
     private ConcurrentHashMap<String, Integer> dbNameMap;
 

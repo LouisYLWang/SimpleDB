@@ -82,7 +82,11 @@ public class BufferPool {
             this.evictPage();
         }
 
-        this.lockManager.acquire(tid, pid, perm);
+        try {
+            this.lockManager.acquire(tid, pid, perm);
+        } catch (InterruptedException e) {
+            e.printStackTrace();
+        }
 
         if (!this.pages.containsKey(pid)){
             int tableId = pid.getTableId();
@@ -139,19 +143,24 @@ public class BufferPool {
             throws IOException {
         // some code goes here
         // not necessary for lab1|lab2
-        for (ConcurrentHashMap.Entry<PageId, Page> entry : this.pages.entrySet()) {
-            PageId pid = entry.getKey();
-            Page page = entry.getValue();
-            if (tid.equals(page.isDirty())) {
-                if (commit) {
-                    flushPage(pid);
-                } else { // abort
-                    entry.setValue(page.getBeforeImage());
+        HashSet<PageId> pagesToRecover = this.lockManager.transactions.get(tid);
+        if (pagesToRecover == null){
+            return;
+        }
+        for (PageId pid: pagesToRecover){
+            if (this.pages.containsKey(pid)){
+                Page page = this.pages.get(pid);
+                Database.getLogFile().logWrite(tid, page.getBeforeImage(), page);
+                Database.getLogFile().force();
+                page.setBeforeImage();
+                if(!commit){
+                    this.pages.replace(pid, page.getBeforeImage());
                 }
             }
         }
-        this.lockManager.txnReleaseLocks(tid);
+        this.lockManager.releaseAll(tid);
     }
+
 
     /**
      * Add a tuple to the specified table on behalf of transaction tid.  Will
@@ -244,19 +253,15 @@ public class BufferPool {
     private synchronized  void flushPage(PageId pid) throws IOException {
         // some code goes here
         // not necessary for lab1
-        Page pg = pages.get(pid);
-        TransactionId dirtier = pg.isDirty();
-        if (dirtier != null){
-            Database.getLogFile().logWrite(dirtier, pg.getBeforeImage(), pg);
-            Database.getLogFile().force();
-        }
-
+        Page page = pages.get(pid);
         if (pages.containsKey(pid)){
-            TransactionId tid = pg.isDirty();
-            if (tid != null){
+            TransactionId dirtier = page.isDirty();
+            if (dirtier != null){
+                Database.getLogFile().logWrite(dirtier, page.getBeforeImage(), page);
+                Database.getLogFile().force();
                 HeapFile f = (HeapFile ) Database.getCatalog().getDatabaseFile(pid.getTableId());
-                f.writePage(pg);
-                pg.markDirty(false, null);
+                f.writePage(page);
+                page.markDirty(false, null);
             }
         }
     }
@@ -280,15 +285,12 @@ public class BufferPool {
     private synchronized  void evictPage() throws DbException {
         // some code goes here
         // not necessary for lab1
-        for (PageId pid: this.pages.keySet()){
-            if (this.pages.get(pid).isDirty() == null){
-                try {
-                    flushPage(pid);
-                } catch (IOException ignored) {}
-                pages.remove(pid);
-                return;
-            }
-        }
-        throw new DbException("all pages are DIRTY!");
+        int randomId = (int) (Math.random() * (pages.size()));
+        ArrayList<PageId> arrayList = new ArrayList<>(pages.keySet());
+        PageId pageId = arrayList.get(randomId);
+        try {
+            flushPage(pageId);
+        } catch (IOException ignored) {}
+        pages.remove(pageId);
     }
 }

@@ -136,7 +136,7 @@ public class Join extends Operator {
             while (child2.hasNext()){
                 Tuple t2 = this.child2.next();
                 Field f2 = t2.getField(this.p.getField2());
-                while (child1Hash.containsKey (f2)){
+                if (child1Hash.containsKey (f2)){
                     for (Tuple t1:child1Hash.get(f2)){
                         TupleDesc td1 = t1.getTupleDesc();
                         TupleDesc td2 = t2.getTupleDesc();

@@ -1,6 +1,7 @@
 package simpledb;
 
 import java.util.HashMap;
+import java.util.HashSet;
 import java.util.Iterator;
 import java.util.Map;
 import java.util.concurrent.ConcurrentHashMap;
@@ -65,7 +66,14 @@ public class TableStats {
      * histograms.
      */
     static final int NUM_HIST_BINS = 100;
-
+    private HashMap<Integer, IntHistogram> intFieldsHistograms;
+    private HashMap<Integer, StringHistogram> stringFieldsHistograms;
+    private HashMap<Integer, HashSet<Integer>> intFieldsValMemo;
+    private HashMap<Integer, HashSet<String>> stringFieldsValMemo;
+    private int ioCostPerPage;
+    private int tuplesNum;
+    private int pgNum;
+    private TupleDesc tp;
     /**
      * Create a new TableStats object, that keeps track of statistics on each
      * column of a table
@@ -85,7 +93,79 @@ public class TableStats {
         // necessarily have to (for example) do everything
         // in a single scan of the table.
         // some code goes here
+        DbFile dbFile = Database.getCatalog().getDatabaseFile(tableid);
+        DbFileIterator fileIterator = dbFile.iterator(new TransactionId());
+
+        try {
+            fileIterator.open();
+        } catch (DbException | TransactionAbortedException e) {
+            e.printStackTrace();
+        }
+
+        this.tuplesNum = 0;
+        this.pgNum = ((HeapFile)dbFile).numPages();
+        this.ioCostPerPage = ioCostPerPage;
+        this.intFieldsHistograms = new HashMap<>();
+        this.stringFieldsHistograms = new HashMap<>();
+        this.intFieldsValMemo = new HashMap<>();
+        this.stringFieldsValMemo = new HashMap<>();
+        this.tp = dbFile.getTupleDesc();
+
+        HashMap<Integer, Integer> intFieldMax = new HashMap<>();
+        HashMap<Integer, Integer> intFieldMin = new HashMap<>();
+
+        try {
+            while(fileIterator.hasNext()){
+                Tuple t = fileIterator.next();
+                this.tuplesNum++;
+                for (int i = 0; i < t.numFields(); i ++){
+                    Field curField = t.getField(i);
+                    if (curField.getType() == Type.INT_TYPE ){
+                        IntField curIntField = (IntField) t.getField(i);
+                        int curFieldVal = curIntField.getValue();
+                        intFieldMin.putIfAbsent(i, curFieldVal);
+                        intFieldMax.putIfAbsent(i, curFieldVal);
+                        intFieldMin.replace(i, Math.min(intFieldMin.get(i), curFieldVal));
+                        intFieldMax.replace(i, Math.max(intFieldMax.get(i), curFieldVal));
+                    }
+                }
+            }
+            fileIterator.rewind();
+        } catch (DbException | TransactionAbortedException e) {
+            e.printStackTrace();
+        }
+
+        try {
+            while(fileIterator.hasNext()){
+                Tuple t = fileIterator.next();
+                for (int i = 0; i < t.numFields(); i ++){
+                    Field curField = t.getField(i);
+                    if (curField.getType() == Type.INT_TYPE ){
+                        int curFieldVal = ((IntField) t.getField(i)).getValue();
+                        intFieldsValMemo.putIfAbsent(i, new HashSet<>());
+                        intFieldsValMemo.get(i).add(curFieldVal);
+                        this.intFieldsHistograms.putIfAbsent(i, new IntHistogram(NUM_HIST_BINS, intFieldMin.get(i), intFieldMax.get(i)));
+                        IntHistogram curHist = this.intFieldsHistograms.get(i);
+                        curHist.addValue(curFieldVal);
+
+                    }  else if (curField.getType() == Type.STRING_TYPE ){
+
+                        String curFieldVal = ((StringField) t.getField(i)).getValue();
+                        stringFieldsValMemo.putIfAbsent(i, new HashSet<>());
+                        stringFieldsValMemo.get(i).add(curFieldVal);
+                        this.stringFieldsHistograms.putIfAbsent(i, new StringHistogram(NUM_HIST_BINS));
+                        StringHistogram curHist = this.stringFieldsHistograms.get(i);
+                        curHist.addValue(curFieldVal);
+                    }
+                }
+            }
+        } catch (DbException | TransactionAbortedException e) {
+            e.printStackTrace();
+        } finally {
+            fileIterator.close();
+        }
     }
+
 
     /**
      * Estimates the cost of sequentially scanning the file, given that the cost
@@ -101,7 +181,7 @@ public class TableStats {
      */
     public double estimateScanCost() {
         // some code goes here
-        return 0;
+        return this.pgNum * this.ioCostPerPage;
     }
 
     /**
@@ -115,7 +195,7 @@ public class TableStats {
      */
     public int estimateTableCardinality(double selectivityFactor) {
         // some code goes here
-        return 0;
+        return (int) (selectivityFactor * this.tuplesNum);
     }
 
     /**
@@ -148,7 +228,19 @@ public class TableStats {
      */
     public double estimateSelectivity(int field, Predicate.Op op, Field constant) {
         // some code goes here
-        return 1.0;
+        if (constant.getType() == Type.INT_TYPE){
+            if (!this.intFieldsHistograms.containsKey(field)){
+                return -1.0;
+            }
+            return this.intFieldsHistograms.get(field).estimateSelectivity(op, ((IntField) constant).getValue());
+        }
+        if (constant.getType() == Type.STRING_TYPE){
+            if (!this.stringFieldsHistograms.containsKey(field)){
+                return -1.0;
+            }
+            return this.stringFieldsHistograms.get(field).estimateSelectivity(op, ((StringField) constant).getValue());
+        }
+        return -1.0;
     }
 
     /**
@@ -156,7 +248,20 @@ public class TableStats {
      * */
     public int totalTuples() {
         // some code goes here
-        return 0;
+        return this.tuplesNum;
     }
 
+
+
+    /**
+     * return the total number of distinct val of given columns in this table
+     * */
+    public int getDistinctVal(int field) {
+        if (this.tp.getFieldType(field) == Type.INT_TYPE) {
+            return this.intFieldsValMemo.get(field).size();
+        } else if (this.tp.getFieldType(field) == Type.STRING_TYPE) {
+            return this.stringFieldsValMemo.get(field).size();
+        }
+        return -1;
+    }
 }
