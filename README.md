@@ -1,6 +1,6 @@
 SimpleDB architecture - course project report of CSE 444
 
- <img src="https://documents.app.lucidchart.com/documents/5fa8f51e-2b02-48c0-b57e-6b54e66cc06c/pages/0_0?a=5970&amp;x=-81&amp;y=-76&amp;w=2605&amp;h=1971&amp;store=1&amp;accept=image%2F*&amp;auth=LCA%207ea37ae89e2da99b1f998ba9186e367a01470f45-ts%3D1592300798" alt="img" style="zoom: 25%;" />
+ <div><img src="./simpleDB architecture.png" alt="img" style="zoom: 25%;" /></div>
 
 ## Lab 1 ##
 
